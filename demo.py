@@ -10,6 +10,24 @@ NUM_ROWS = 34
 MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
 
 
+def fill_polyline(polyline):
+    """assumption: the x is a sequence and x_n+1 > x_n, for each x_n is only one y_n"""
+    x, y = polyline
+    if len(x)-1 >= x[-1] - x[0]:
+        print("fill_polyline: fill polyline is not needed, input data are returned")
+        return polyline
+    ret_x = [x[0]]
+    ret_y = [y[0]]
+    for ii in range(len(x) - 1):
+        x_diff = x[ii+1] - x[ii]
+        y_diff = y[ii+1] - y[ii]
+        for jj in range(1, x_diff+1):
+            ret_x.append(x[ii] + jj)
+            ret_y.append(y[ii] + int(round(jj * y_diff/x_diff)))
+
+    return np.asarray([ret_x, ret_y])
+
+
 def rows_from_file(rows, im_shape):
     f = open(rows)
     ret = []
@@ -32,7 +50,9 @@ def rows_from_file(rows, im_shape):
         y = np.asarray(eval(y_s))
         if scale_y:
             y = y * scale_y
-        ret.append(np.asarray([x,y]))
+        polyline = np.int32(np.round([x,y]))
+        xy_points = fill_polyline(polyline)
+        ret.append(xy_points)
 
     return ret
 
