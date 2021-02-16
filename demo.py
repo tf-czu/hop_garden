@@ -8,6 +8,9 @@ from matplotlib import pyplot as plt
 
 NUM_ROWS = 34
 MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
+PIX_SIZE = 36/555  # m, for 1867 x 3402 image
+#PIX_SIZE = 36/555 * 22084/3402  # m, increase pixel size for 12124 x 22084 resolution
+EXPECT_ROW_WIDTH = 1.2 # m, expected row width (plants are sought there)
 
 
 def fill_polyline(polyline):
@@ -200,34 +203,85 @@ def detect_rows(bin_im):
         yy = p(xx)
         # rotate points back, according to orig. image
         xx_r, yy_r = rotate_points(xx, yy, a_deg)
-        xx_r = np.round(xx_r).astype(np.uint32)
-        yy_r = np.round(yy_r).astype(np.uint32)
-        rows.append(np.array([xx_r, yy_r]))
+        xx_r = np.round(xx_r)
+        yy_r = np.round(yy_r)
+        rows.append(np.array([xx_r, yy_r], np.int32))
 
     return rows
+
+
+def blank_spaces_detect(bin_im, hop_rows, org_image):
+    row_width_px = int(round(EXPECT_ROW_WIDTH / PIX_SIZE))
+    # print used constants
+    print("EXPECT_ROW_WIDTH: %.2f m" %EXPECT_ROW_WIDTH)
+    print("row_width_px: %d" %row_width_px)
+
+    element = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    # !! the objects are moving ??
+    #bin_im2 = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element)  # removes small holes
+    #bin_im3 = cv2.morphologyEx(bin_im2, cv2.MORPH_OPEN, element)  # removes very small objects
+
+    for row in hop_rows:
+        im_mask = np.zeros(bin_im.shape, np.uint8)  # to be area of interest around one row
+        one_row = im_mask.copy()
+        row = row.T
+        row = row.reshape((-1, 1, 2))
+        cv2.polylines(im_mask, [row], False, 255, thickness=row_width_px)
+        if g_debug:  # draw control contours in the org_image
+            row_contours, __ = cv2.findContours(im_mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(org_image, row_contours, -1, (0, 0, 255), 2)
+
+        mask = im_mask == 255
+        one_row[mask] = bin_im[mask]
+
+        contours, __ = cv2.findContours(one_row.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        if g_debug:
+            cv2.drawContours(org_image, contours, -1, (0, 0, 255), 1)
+            print(bin_im.shape, org_image.shape, one_row.shape)
+            cv2.imwrite("logs/one_row.png", one_row)
+            break
+        centroids = []
+        areas = []  # in m2
+        size_data = []
+        for cnt in contours:
+            moments = cv2.moments(cnt)
+            areas.append(moments["m00"] * PIX_SIZE ** 2)
+            xc = moments["m10"] / moments["m00"]
+            yc = moments["m01"] / moments["m00"]
+            centroids.append([xc, yc])
+            position, size, angle = cv2.minAreaRect(cnt)  # top-left corner(x,y), (width, height), angle of rotation
+            size_data.append([position[0], position[1], angle])
+
+    if g_debug:
+        show_im(org_image)
+        cv2.imwrite("logs/contours.png", org_image)
 
 
 def detect_plants(im, rows):
     norm_g = norm_green(im)
     bin_im = threshold(norm_g)
+    if g_debug:
+        show_im(bin_im)
+        cv2.imwrite("logs/bin_image.png", bin_im)
+
     if rows:
         hop_rows = rows_from_file(rows, bin_im.shape)
     else:
         hop_rows = detect_rows(bin_im)
         save_hop_rows(hop_rows, bin_im.shape)
-
-    # draw hop_rows
-    im2 = im.copy()
-    for row in hop_rows:
-        row = row.T
-        row = row.reshape((-1,1,2))
-        cv2.polylines(im2, [np.int32(row)], False, (0, 0, 255))
-
     if g_debug:
-        show_im(bin_im)
-        cv2.imwrite("logs/bin_image.png", bin_im)
-    show_im(im2)
-    cv2.imwrite("logs/rows_in_im.png", im2)
+        # draw hop_rows
+        im2 = im.copy()
+        for row in hop_rows:
+            row = row.T
+            row = row.reshape((-1,1,2))
+            cv2.polylines(im2, [row], False, (0, 0, 255), thickness=2)
+
+        show_im(im2)
+        cv2.imwrite("logs/rows_in_im.png", im2)
+
+    # detect blank spaces
+    blank_spaces_detect(bin_im.copy(), hop_rows, im.copy())
 
 
 if __name__ == '__main__':
