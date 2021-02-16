@@ -1,6 +1,7 @@
 """
     Demo code for hop plants detection
 """
+import os
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
@@ -37,7 +38,7 @@ def rows_from_file(rows, im_shape):
 
 
 def save_hop_rows(hop_rows, im_shape):
-    f = open("detected_rows.txt", "w")
+    f = open("logs/detected_rows.txt", "w")
     f.write(str(im_shape))  # write image resolution
     f.write("\r\n")
     for row in hop_rows:
@@ -152,7 +153,7 @@ def detect_rows(bin_im):
 
     if g_debug:
         show_im(rot_bin_im2)
-        cv2.imwrite("rot_bin_image.png", rot_bin_im2)
+        cv2.imwrite("logs/rot_bin_image.png", rot_bin_im2)
 
     centroids = []
     for cnt in contours:
@@ -204,9 +205,9 @@ def detect_plants(im, rows):
 
     if g_debug:
         show_im(bin_im)
-        cv2.imwrite("bin_image.png", bin_im)
+        cv2.imwrite("logs/bin_image.png", bin_im)
     show_im(im2)
-    cv2.imwrite("rows_in_im.png", im2)
+    cv2.imwrite("logs/rows_in_im.png", im2)
 
 
 if __name__ == '__main__':
@@ -217,6 +218,8 @@ if __name__ == '__main__':
     parser.add_argument('--rows-file', help='path to file with rows')
     parser.add_argument('--debug', '-d', help='shows debug graphs and images', action='store_true')
     args = parser.parse_args()
+
+    os.makedirs("logs", exist_ok = True)
 
     if args.rows_file:
         rows = args.rows_file
