@@ -6,7 +6,8 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 
-NUM_ROWS = 34
+NUM_ROWS = 35
+SECTION_POINTS = [0,-1,570,3100]
 MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
 PIX_SIZE = 36/555  # m, for 1867 x 3402 image
 #PIX_SIZE = 36/555 * 22084/3402  # m, increase pixel size for 12124 x 22084 resolution
@@ -170,7 +171,9 @@ def check_space(r_start, r_end):
 
 def detect_rows(bin_im):
     # irregular plot shape makes problem with angle calculation
-    sample = bin_im[570:3100, :]  # The image section used for angle calculation. Tested on "Biochmel_rgb_200427.tif".
+    # unpack section
+    x1, xn, y1, yn = g_section
+    sample = bin_im[y1:yn, x1:xn]  # The image section used for angle calculation. Tested on "Biochmel_rgb_200427.tif".
     # https://en.wikipedia.org/wiki/Image_moment#Examples_2
     moments = cv2.moments(sample)
     mu11 = moments["mu11"]
@@ -178,8 +181,13 @@ def detect_rows(bin_im):
     mu02 = moments["mu02"]
     a = 0.5 * np.arctan(2 * mu11 / (mu20 - mu02))  # radians
     a_deg = np.rad2deg(a)
+    if g_plus_angle:
+        a_deg = g_plus_angle
     print("Calculated angle: %.3f" % a_deg)
     rot_bin_im = rotate_image(bin_im, a_deg)
+    if g_debug:
+        show_im(rot_bin_im)
+        cv2.imwrite("logs/rot_bin_image.png", rot_bin_im)
 
     num_wpixels_rows = np.sum(rot_bin_im, axis=1)
     #print(num_wpixels_rows.size)
@@ -206,7 +214,7 @@ def detect_rows(bin_im):
 
     if g_debug:
         show_im(rot_bin_im2)
-        cv2.imwrite("logs/rot_bin_image.png", rot_bin_im2)
+        cv2.imwrite("logs/rot_bin_image2.png", rot_bin_im2)
 
     centroids = []
     for cnt in contours:
@@ -349,7 +357,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('imfile', help='path to image file')
     parser.add_argument('--rows-file', help='path to file with rows')
-    parser.add_argument('--debug', '-d', help='shows debug graphs and images', action='store_true')
+    parser.add_argument('--section', help='An image section used for angle calculation, default: "0,-1,570,3100"')
+    parser.add_argument('--plus-angle', help='Increase angle by user defined angle (45 or -45 deg)')
+    parser.add_argument('--debug', '-d', help='Shows debug graphs and images', action='store_true')
     args = parser.parse_args()
 
     os.makedirs("logs", exist_ok = True)
@@ -360,10 +370,19 @@ if __name__ == '__main__':
         rows = None
     g_debug = args.debug
 
+    if args.section:
+        g_section = args.section.split(",")
+        g_section = [int(num) for num in g_section]
+    else:
+        g_section = SECTION_POINTS
+    g_plus_angle = False
+    if args.plus_angle:
+        g_plus_angle = float(args.plus_angle)
+
     im = cv2.imread(args.imfile)
     if im is not None:
         M, N, K = im.shape
-        print("Resolution: %d, %d, %d" %(M, N, K))
+        print("Resolution: %d, %d, %d" % (M, N, K))
         detect_plants(im, rows)
     else:
-        print("No image in path: %s" %args.imfile)
+        print("No image in path: %s" % args.imfile)
