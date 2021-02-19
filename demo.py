@@ -146,7 +146,26 @@ def sort_plants(row, centroids):
     dist_to_start = np.linalg.norm(centroids - start, axis=1)
     sort_idx = np.argsort(dist_to_start)
 
-    return centroids[sort_idx,:], dist_to_start[sort_idx]
+    return sort_idx, dist_to_start[sort_idx]
+
+
+def check_space(r_start, r_end):
+    r_start = cv2.boxPoints(r_start)
+    r_end = cv2.boxPoints(r_end)
+    min_dist = []
+    min_dist_argv = []
+    for xy in r_start:
+        dists = np.linalg.norm(r_end - xy, axis=1)
+        min_dist.append(np.min(dists))
+        min_dist_argv.append(np.argmin(dists))
+
+    min_pdist = min(min_dist)
+    point_id_start = np.argmin(min_dist)
+    point_id_end = min_dist_argv[point_id_start]
+    point_start = r_start[point_id_start]
+    point_end = r_end[point_id_end]
+
+    return np.int32(point_start), np.int32(point_end), min_pdist
 
 
 def detect_rows(bin_im):
@@ -224,13 +243,15 @@ def detect_rows(bin_im):
 def blank_spaces_detect(bin_im, hop_rows, org_image):
     row_width_px = int(round(EXPECT_ROW_WIDTH / PIX_SIZE))
     # print used constants
-    print("EXPECT_ROW_WIDTH: %.2f m" %EXPECT_ROW_WIDTH)
-    print("row_width_px: %d" %row_width_px)
+    print("EXPECT_ROW_WIDTH: %.2f m" % EXPECT_ROW_WIDTH)
+    print("row_width_px: %d" % row_width_px)
+    print("MIN_PLANT_AREA: %f m2" % MIN_PLANT_AREA)
+    print("MAX_PLANT_DIST: %f m" % MAX_PLANT_DIST)
 
-    #element = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    # !! the objects are moving ??
-    #bin_im2 = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element)  # removes small holes
-    #bin_im3 = cv2.morphologyEx(bin_im2, cv2.MORPH_OPEN, element)  # removes very small objects
+    element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    # even number of pixel (element size 2 or 4) brings problems with contour shift.
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element)  # removes small holes
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element)  # removes very small objects
 
     for row in hop_rows:
         im_mask = np.zeros(bin_im.shape, np.uint8)  # to be area of interest around one row
@@ -238,14 +259,14 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
         row = row.T
         row = row.reshape((-1, 1, 2))
         cv2.polylines(im_mask, [row], False, 255, thickness=row_width_px)
-        if g_debug:  # draw control contours in the org_image
-            row_contours, __ = cv2.findContours(im_mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(org_image, row_contours, -1, (0, 0, 255), 2)
+        # draw control contours in the org_image
+        row_contours, __ = cv2.findContours(im_mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(org_image, row_contours, -1, (0, 0, 255), 2)
 
         mask = im_mask == 255
         one_row[mask] = bin_im[mask]
 
-        _contours, __ = cv2.findContours(one_row.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        _contours, __ = cv2.findContours(one_row.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)  # TODO ??yes, we need all the points
         contours = []
         areas = []  # areas in m2
         centroids = []
@@ -253,31 +274,43 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
         for cnt in _contours:
             moments = cv2.moments(cnt)
             ar = moments["m00"] * PIX_SIZE ** 2
-            if ar < MIN_PLANT_AREA:
+            if ar < MIN_PLANT_AREA:  # Note it is possible that a small objects are already removed by morphologyEx function.
                 continue
             contours.append(cnt)
             areas.append(ar)
             xc = moments["m10"] / moments["m00"]
             yc = moments["m01"] / moments["m00"]
             centroids.append([xc, yc])
-            position, size, angle = cv2.minAreaRect(cnt)  # top-left corner(x,y), (width, height), angle of rotation
-            size_data.append([position[0], position[1], angle])
+            minA_rec = cv2.minAreaRect(cnt)  # top-left corner(x,y), (width, height), angle of rotation
+            size_data.append(minA_rec)
 
-        if g_debug:
-            cv2.drawContours(org_image, contours, -1, (0, 0, 255), 1)
-            #print(bin_im.shape, org_image.shape, one_row.shape, len(contours))
+        cv2.drawContours(org_image, contours, -1, (0, 0, 255), 1)
+        #print(bin_im.shape, org_image.shape, one_row.shape, len(contours))
 
         # calculate distances from row start and sort it
         centroids = np.int32(centroids)
-        sorted_centroids, dist_to_start  = sort_plants(row, centroids)
+        sort_idx, dist_to_start  = sort_plants(row, centroids)
+        sorted_centroids = centroids[sort_idx,:]
+        sorted_size_data = [size_data[ii] for ii in sort_idx]
+
         dist_to_start = dist_to_start*PIX_SIZE  # dist in meters
         dist_diff = np.diff(dist_to_start)
         big_dist_id = np.where(dist_diff > MAX_PLANT_DIST)[0]
+        big_dist_id_end = big_dist_id + 1
+
         spaces_start = sorted_centroids[big_dist_id]
-        spaces_end = sorted_centroids[big_dist_id+1]
-        for ii, start in enumerate(spaces_start):
-            end = spaces_end[ii]
-            cv2.line(org_image, tuple(start), tuple(end), (255, 0, 0), 1)
+        spaces_end = sorted_centroids[big_dist_id_end]
+        rec_start = [sorted_size_data[ii] for ii in big_dist_id]
+        rec_end = [sorted_size_data[ii] for ii in big_dist_id_end]
+
+        # Draw spaces in the image
+        for item in zip(spaces_start, spaces_end, rec_start, rec_end):
+            start, end, r_start, r_end = item  # TODO do we need centroids here?
+            start2, end2, pdist = check_space(r_start, r_end)
+            pdist_m = pdist * PIX_SIZE  # dist in meters
+            if pdist_m < MAX_PLANT_DIST - 0.2:
+                continue
+            cv2.line(org_image, tuple(start2), tuple(end2), (255, 0, 0), 1)
 
     show_im(org_image)
     cv2.imwrite("logs/org_image.png", org_image)
