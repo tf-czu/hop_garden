@@ -1,0 +1,3 @@
+Konv_chmel_200427.tif
+angle: -61
+row: 35
