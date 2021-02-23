@@ -9,8 +9,8 @@ from matplotlib import pyplot as plt
 NUM_ROWS = 35
 SECTION_POINTS = [0,-1,570,3100]
 MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
-PIX_SIZE = 36/555  # m, for 1867 x 3402 image
-#PIX_SIZE = 36/555 * 22084/3402  # m, increase pixel size for 12124 x 22084 resolution
+#PIX_SIZE = 36/555  # m, for 1867 x 3402 image
+PIX_SIZE = 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
 EXPECT_ROW_WIDTH = 1.2  # m, expected row width (plants are sought there)
 MIN_PLANT_AREA = 0.01  # m^2
 MAX_PLANT_DIST = 2  # m
@@ -181,8 +181,8 @@ def detect_rows(bin_im):
     mu02 = moments["mu02"]
     a = 0.5 * np.arctan(2 * mu11 / (mu20 - mu02))  # radians
     a_deg = np.rad2deg(a)
-    if g_plus_angle:
-        a_deg = g_plus_angle
+    if g_user_angle:
+        a_deg = g_user_angle
     print("Calculated angle: %.3f" % a_deg)
     rot_bin_im = rotate_image(bin_im, a_deg)
     if g_debug:
@@ -358,7 +358,7 @@ if __name__ == '__main__':
     parser.add_argument('imfile', help='path to image file')
     parser.add_argument('--rows-file', help='path to file with rows')
     parser.add_argument('--section', help='An image section used for angle calculation, default: "0,-1,570,3100"')
-    parser.add_argument('--plus-angle', help='Increase angle by user defined angle (45 or -45 deg)')
+    parser.add_argument('--user-angle', help='Increase angle by user defined angle (45 or -45 deg)')
     parser.add_argument('--debug', '-d', help='Shows debug graphs and images', action='store_true')
     args = parser.parse_args()
 
@@ -375,9 +375,9 @@ if __name__ == '__main__':
         g_section = [int(num) for num in g_section]
     else:
         g_section = SECTION_POINTS
-    g_plus_angle = False
-    if args.plus_angle:
-        g_plus_angle = float(args.plus_angle)
+    g_user_angle = False
+    if args.user_angle:
+        g_user_angle = float(args.user_angle)
 
     im = cv2.imread(args.imfile)
     if im is not None:
