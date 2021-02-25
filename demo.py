@@ -6,16 +6,18 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 
-NUM_ROWS = 35
+NUM_ROWS = 34
 SECTION_POINTS = [0,-1,570,3100]
-MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
+
 #PIX_SIZE = 36/555  # m, for 1867 x 3402 image
-PIX_SIZE = 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
+PIX_SIZE = 0.01  # 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
 EXPECT_ROW_WIDTH = 0.6  # m, expected row width (plants are sought there)
 MIN_PLANT_AREA = 0.01  # m^2
 MAX_PLANT_DIST = 1.5  # m
 # element size is 3x3 px, one iteration corresponds to 1 px, formula is (distance to remove in meters) / pixel size
 NUM_ERODE_ITER = int(round(0.05/PIX_SIZE))
+SMOOTH = int(0.06/PIX_SIZE *20)
+MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
 
 
 def remove_parallel_cnt(sorted_centroids, sorted_size_data, sorted_areas):
@@ -179,7 +181,7 @@ def detect_rows(bin_im):
     # irregular plot shape makes problem with angle calculation
     # unpack section
     x1, xn, y1, yn = g_section
-    sample = bin_im[y1:yn, x1:xn]  # The image section used for angle calculation. Tested on "Biochmel_rgb_200427.tif".
+    sample = bin_im[y1:yn, x1:xn]
     # https://en.wikipedia.org/wiki/Image_moment#Examples_2
     moments = cv2.moments(sample)
     mu11 = moments["mu11"]
@@ -197,12 +199,12 @@ def detect_rows(bin_im):
 
     num_wpixels_rows = np.sum(rot_bin_im, axis=1)
     #print(num_wpixels_rows.size)
-    num_wpixels_rows = np.convolve(num_wpixels_rows, np.ones(20) / 20, mode="same")  # smooth data
+    num_wpixels_rows = np.convolve(num_wpixels_rows, np.ones(SMOOTH) / SMOOTH, mode="same")  # smooth data
     # num_wpixels_rows = np.resize(num_wpixels_rows, num_wpixels_rows.size//10)
     if g_debug:
         plt.plot(num_wpixels_rows)
         plt.show()
-    mask_rows = num_wpixels_rows > 1e4  # Threshold for rows detection, may be modified.
+    mask_rows = num_wpixels_rows > g_thr_num_wpixels  # Threshold for rows detection, may be modified.
     # It corresponds with number of green pixels times 255.
     edge = np.diff(mask_rows)
     assert sum(edge) == 2 * NUM_ROWS, "Number of rows should be %d, detected: %f" % (NUM_ROWS, sum(edge) / 2)
@@ -212,8 +214,8 @@ def detect_rows(bin_im):
 
     # detect contour, used for rows detection
     __, rot_bin_im2 = cv2.threshold(rot_bin_im, 127, 255, cv2.THRESH_BINARY)  # again, it was damaged during rotation
-    element = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    rot_bin_im2 = cv2.morphologyEx(rot_bin_im2, cv2.MORPH_OPEN, element)  # removes very small objects
+    element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    rot_bin_im2 = cv2.morphologyEx(rot_bin_im2, cv2.MORPH_OPEN, element, iterations=NUM_ERODE_ITER)  # removes very small objects
     contours, __ = cv2.findContours(rot_bin_im2.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     print("Number of green splotchs: %d" %(len(contours)))
     # cv2.drawContours(rot_bin_im2, contours, -1, (255), 1)
@@ -369,8 +371,9 @@ if __name__ == '__main__':
     parser.add_argument('imfile', help='path to image file')
     parser.add_argument('--rows-file', help='path to file with rows')
     parser.add_argument('--section', help='An image section used for angle calculation, default: "0,-1,570,3100"')
-    parser.add_argument('--user-angle', help='Increase angle by user defined angle (45 or -45 deg)')
+    parser.add_argument('--user-angle', help='User defined angle for rows detection')
     parser.add_argument('--debug', '-d', help='Shows debug graphs and images', action='store_true')
+    parser.add_argument('--thr', help='Threshold for rows detection', default=6e4, type=float)
     args = parser.parse_args()
 
     os.makedirs("logs", exist_ok = True)
@@ -389,6 +392,8 @@ if __name__ == '__main__':
     g_user_angle = False
     if args.user_angle:
         g_user_angle = float(args.user_angle)
+    if args.thr:
+        g_thr_num_wpixels = args.thr
 
     im = cv2.imread(args.imfile)
     if im is not None:
