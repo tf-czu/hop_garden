@@ -1,5 +1,5 @@
 import unittest
-from demo import fill_polyline, sort_plants, check_space
+from demo import fill_polyline, sort_plants, check_space, remove_parallel_cnt
 import numpy as np
 
 
@@ -29,6 +29,9 @@ class MyTestCase(unittest.TestCase):
         self.assertTrue(np.array_equal(ret_start, expect_start))
         self.assertTrue(np.array_equal(ret_end, expect_end))
         self.assertAlmostEqual(min_pdist, np.sqrt(2))
+
+    def test_remove_parallel_cnt(self):
+        pass
 
 
 if __name__ == '__main__':
