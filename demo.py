@@ -11,9 +11,15 @@ SECTION_POINTS = [0,-1,570,3100]
 MAX_DIST_TO_LINE = 5  # pixels, working for 1867 x 3402 image
 #PIX_SIZE = 36/555  # m, for 1867 x 3402 image
 PIX_SIZE = 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
-EXPECT_ROW_WIDTH = 1.2  # m, expected row width (plants are sought there)
+EXPECT_ROW_WIDTH = 0.6  # m, expected row width (plants are sought there)
 MIN_PLANT_AREA = 0.01  # m^2
-MAX_PLANT_DIST = 2  # m
+MAX_PLANT_DIST = 1.5  # m
+# element size is 3x3 px, one iteration corresponds to 1 px, formula is (distance to remove in meters) / pixel size
+NUM_ERODE_ITER = int(round(0.05/PIX_SIZE))
+
+
+def remove_parallel_cnt(sorted_centroids, sorted_size_data, sorted_areas):
+    pass
 
 
 def fill_polyline(polyline):
@@ -258,8 +264,8 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
 
     element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     # even number of pixel (element size 2 or 4) brings problems with contour shift.
-    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element)  # removes small holes
-    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element)  # removes very small objects
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element, iterations=NUM_ERODE_ITER)  # removes very small objects
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element, iterations=NUM_ERODE_ITER)  # removes small holes
 
     for row in hop_rows:
         im_mask = np.zeros(bin_im.shape, np.uint8)  # to be area of interest around one row
@@ -297,12 +303,17 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
 
         # calculate distances from row start and sort it
         centroids = np.int32(centroids)
-        sort_idx, dist_to_start  = sort_plants(row, centroids)
+        sort_idx, dist_to_start = sort_plants(row, centroids)
         sorted_centroids = centroids[sort_idx,:]
         sorted_size_data = [size_data[ii] for ii in sort_idx]
+        sorted_areas = [areas[ii] for ii in sort_idx]
 
         dist_to_start = dist_to_start*PIX_SIZE  # dist in meters
         dist_diff = np.diff(dist_to_start)
+
+        # Filter contoures, try to avoid grass detection
+        object_idx = remove_parallel_cnt(dist_diff, sorted_size_data, sorted_areas)
+
         big_dist_id = np.where(dist_diff > MAX_PLANT_DIST)[0]
         big_dist_id_end = big_dist_id + 1
 
@@ -318,7 +329,7 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
             pdist_m = pdist * PIX_SIZE  # dist in meters
             if pdist_m < MAX_PLANT_DIST - 0.2:
                 continue
-            cv2.line(org_image, tuple(start2), tuple(end2), (255, 0, 0), 1)
+            cv2.line(org_image, tuple(start2), tuple(end2), (255, 0, 0), 2)
 
     show_im(org_image)
     cv2.imwrite("logs/org_image.png", org_image)
