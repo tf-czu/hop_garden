@@ -5,6 +5,7 @@ import os
 import cv2
 import numpy as np
 from matplotlib import pyplot as plt
+import json
 
 NUM_ROWS = 34
 SECTION_POINTS = [0,-1,570,3100]
@@ -18,6 +19,15 @@ MAX_PLANT_DIST = 1.5  # m
 NUM_ERODE_ITER = int(round(0.05/PIX_SIZE))
 SMOOTH = int(0.06/PIX_SIZE *20)
 MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
+
+
+def parse_im_data(im_data):
+    with open(im_data) as f:
+        data = json.load(f)
+        plot_cnt = np.array(data["plot_cnt"])
+        rot_rec = np.array(data["rot_rec"])
+
+    return plot_cnt, rot_rec
 
 
 def remove_parallel_cnt(sorted_centroids, sorted_size_data, sorted_areas):
@@ -177,11 +187,11 @@ def check_space(r_start, r_end):
     return np.int32(point_start), np.int32(point_end), min_pdist
 
 
-def detect_rows(bin_im):
+def detect_rows(bin_im, section, plot_cnt):
     # irregular plot shape makes problem with angle calculation
-    # unpack section
-    x1, xn, y1, yn = g_section
-    sample = bin_im[y1:yn, x1:xn]
+    # use section cnt
+    sample = np.zeros(bin_im.shape, np.uint8)
+    cv2.drawContours(sample, [section], 0, (255), -1)
     # https://en.wikipedia.org/wiki/Image_moment#Examples_2
     moments = cv2.moments(sample)
     mu11 = moments["mu11"]
@@ -239,19 +249,33 @@ def detect_rows(bin_im):
         sorted_centroids.append(np.sort(np.asarray(centroids[mask]),0))
 
     rows = []
+    plot_mask = np.zeros(bin_im.shape, np.uint8)
+    cv2.drawContours(plot_mask, [plot_cnt], 0, 1, -1)
+    plot_mask = plot_mask.astype(bool)
     for c_points in sorted_centroids:
         x = [c[0] for c in c_points]
         y = [c[1] for c in c_points]
         row_coeff = get_row(x, y)
         # get poits
         p = np.poly1d(row_coeff)
-        xx = np.arange(x[0], x[-1])
+        xn = rot_bin_im2.shape[1] -1  # last pixel row in the image
+        xx = np.arange(0, xn)  # use the full width of the rot_image
         yy = p(xx)
         # rotate points back, according to orig. image
         xx_r, yy_r = rotate_points(xx, yy, a_deg)
-        xx_r = np.round(xx_r)
-        yy_r = np.round(yy_r)
-        rows.append(np.array([xx_r, yy_r], np.int32))
+        xx_r = np.int32(np.round(xx_r))
+        yy_r = np.int32(np.round(yy_r))
+
+        # remove outside values
+        idx = np.logical_and(xx_r>0, xx_r<=xn)
+        xx_r = xx_r[idx]
+        yy_r = yy_r[idx]
+        row_mask = np.zeros(bin_im.shape, dtype=bool)
+        row_mask[yy_r,xx_r] = True
+        cut_row_mask = np.logical_and(row_mask, plot_mask)
+        yy_ret, xx_ret = np.where(cut_row_mask)
+
+        rows.append(np.array([xx_ret, yy_ret], np.int32))
 
     return rows
 
@@ -337,7 +361,8 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
     cv2.imwrite("logs/org_image.png", org_image)
 
 
-def detect_plants(im, rows):
+def detect_plants(im, im_data, rows):
+    plot_cnt, section = parse_im_data(im_data)
     norm_g = norm_green(im)
     bin_im = threshold(norm_g)
     if g_debug:
@@ -347,7 +372,10 @@ def detect_plants(im, rows):
     if rows:
         hop_rows = rows_from_file(rows, bin_im.shape)
     else:
-        hop_rows = detect_rows(bin_im)
+        if g_debug:
+            cv2.drawContours(im, [section], 0, (255,0,255), 2)
+            show_im(im)
+        hop_rows = detect_rows(bin_im, section, plot_cnt)
         save_hop_rows(hop_rows, bin_im.shape)
     if g_debug:
         # draw hop_rows
@@ -356,6 +384,7 @@ def detect_plants(im, rows):
             row = row.T
             row = row.reshape((-1,1,2))
             cv2.polylines(im2, [row], False, (0, 0, 255), thickness=2)
+            cv2.drawContours(im2, [plot_cnt], 0, (255,0,0), 2)
 
         show_im(im2)
         cv2.imwrite("logs/rows_in_im.png", im2)
@@ -369,6 +398,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('imfile', help='path to image file')
+    parser.add_argument('--im-data', help='Json file with image information for data processing')
     parser.add_argument('--rows-file', help='path to file with rows')
     parser.add_argument('--section', help='An image section used for angle calculation, default: "0,-1,570,3100"')
     parser.add_argument('--user-angle', help='User defined angle for rows detection')
@@ -399,6 +429,6 @@ if __name__ == '__main__':
     if im is not None:
         M, N, K = im.shape
         print("Resolution: %d, %d, %d" % (M, N, K))
-        detect_plants(im, rows)
+        detect_plants(im, args.im_data, rows)
     else:
         print("No image in path: %s" % args.imfile)
