@@ -15,10 +15,13 @@ PIX_SIZE = 0.01  # 36/555 * 3402/22084  # m, increase pixel size for 12124 x 220
 EXPECT_ROW_WIDTH = 0.6  # m, expected row width (plants are sought there)
 MIN_PLANT_AREA = 0.01  # m^2
 MAX_PLANT_DIST = 1.5  # m
+MIN_PLANT_DIST = 0.6  # m
 # element size is 3x3 px, one iteration corresponds to 1 px, formula is (distance to remove in meters) / pixel size
 NUM_ERODE_ITER = int(round(0.05/PIX_SIZE))
 SMOOTH = int(0.06/PIX_SIZE *20)
 MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
+
+N = M = 20 # for test only
 
 
 def parse_im_data(im_data):
@@ -30,7 +33,40 @@ def parse_im_data(im_data):
     return plot_cnt, rot_rec
 
 
-def remove_parallel_cnt(sorted_centroids, sorted_size_data, sorted_areas):
+def remove_parallel_cnt(sorted_size_data, angle):
+    remove_idx = []
+    for ii, rec_l in enumerate(sorted_size_data):
+        if ii + 1 == len(sorted_size_data):
+            break
+        rec_r = sorted_size_data[ii+1]
+        rec_l = cv2.boxPoints(rec_l)
+        rec_r = cv2.boxPoints(rec_r)
+        # draw pic
+        """
+        bb = np.zeros((20, 20), np.uint8)
+        print(row)
+        cv2.polylines(bb, [row], False, 255, thickness=1)
+        rec_l_int = np.int32(rec_l)
+        rec_r_int = np.int32(rec_r)
+        cv2.drawContours(bb, [rec_l_int, rec_r_int], -1, 255, 1)
+        show_im(bb)
+        """
+        rec_l_xR, rec_l_yR = rotate_points(rec_l[:, 0], rec_l[:, 1], angle)
+        rec_r_xR, rec_r_yR = rotate_points(rec_r[:, 0], rec_r[:, 1], angle)
+        len_rec_l = max(rec_l_xR) - min(rec_l_xR)
+        len_rec_r = max(rec_r_xR) - min(rec_r_xR)
+
+        if (len_rec_l > len_rec_r) and (max(rec_l_xR) > max(rec_r_xR)):
+            remove_idx.append(ii+1)
+        elif (len_rec_l <= len_rec_r) and (min(rec_r_xR) < min(rec_l_xR)):
+            remove_idx.append(ii)
+
+    ret_idx = np.arange(len(sorted_size_data))
+
+    return np.delete(ret_idx, remove_idx)
+
+
+def remove_soclose_cnt(dist_diff, sorted_areas):
     pass
 
 
@@ -56,6 +92,7 @@ def rows_from_file(rows, im_shape):
     f = open(rows)
     ret = []
     org_im_shape = None
+    angle = None
     scale_x = None
     scale_y = None
 
@@ -66,6 +103,9 @@ def rows_from_file(rows, im_shape):
             if im_shape != org_im_shape:
                 scale_x = im_shape[1] / org_im_shape[1]
                 scale_y = im_shape[0] / org_im_shape[0]
+            continue
+        if not angle:
+            angle = float(line)
             continue
         x_s, y_s = line.split(";")
         x = np.asarray(eval(x_s))
@@ -78,13 +118,13 @@ def rows_from_file(rows, im_shape):
         xy_points = fill_polyline(polyline)
         ret.append(xy_points)
 
-    return ret
+    return ret, angle
 
 
-def save_hop_rows(hop_rows, im_shape):
+def save_hop_rows(hop_rows, im_shape, angle):
     f = open("logs/detected_rows.txt", "w")
-    f.write(str(im_shape))  # write image resolution
-    f.write("\r\n")
+    f.write(str(im_shape) + "\r\n")  # write image resolution
+    f.write("%.3f\r\n" %angle)
     for row in hop_rows:
         x, y = row
         f.write(str(list(x)))
@@ -277,10 +317,10 @@ def detect_rows(bin_im, section, plot_cnt):
 
         rows.append(np.array([xx_ret, yy_ret], np.int32))
 
-    return rows
+    return rows, a_deg
 
 
-def blank_spaces_detect(bin_im, hop_rows, org_image):
+def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     row_width_px = int(round(EXPECT_ROW_WIDTH / PIX_SIZE))
     # print used constants
     print("EXPECT_ROW_WIDTH: %.2f m" % EXPECT_ROW_WIDTH)
@@ -333,12 +373,20 @@ def blank_spaces_detect(bin_im, hop_rows, org_image):
         sorted_centroids = centroids[sort_idx,:]
         sorted_size_data = [size_data[ii] for ii in sort_idx]
         sorted_areas = [areas[ii] for ii in sort_idx]
+        contours_sorted = [contours[ii] for ii in sort_idx]
+
+        # Filter contoures, try to avoid grass detection
+        object_idx = remove_parallel_cnt(sorted_size_data, angle)
+        #print(object_idx)
+        dist_to_start = dist_to_start[object_idx]
+        sorted_centroids = sorted_centroids[object_idx, :]
+        sorted_size_data = [sorted_size_data[ii] for ii in object_idx]
+        sorted_areas = [sorted_areas[ii] for ii in object_idx]
+        contours_sorted = [contours_sorted[ii] for ii in object_idx]
+        cv2.drawContours(org_image, contours_sorted, -1, (255, 0, 0), 1)  # cnt used for space detection
 
         dist_to_start = dist_to_start*PIX_SIZE  # dist in meters
         dist_diff = np.diff(dist_to_start)
-
-        # Filter contoures, try to avoid grass detection
-        object_idx = remove_parallel_cnt(dist_diff, sorted_size_data, sorted_areas)
 
         big_dist_id = np.where(dist_diff > MAX_PLANT_DIST)[0]
         big_dist_id_end = big_dist_id + 1
@@ -370,13 +418,13 @@ def detect_plants(im, im_data, rows):
         cv2.imwrite("logs/bin_image.png", bin_im)
 
     if rows:
-        hop_rows = rows_from_file(rows, bin_im.shape)
+        hop_rows, angle = rows_from_file(rows, bin_im.shape)
     else:
         if g_debug:
             cv2.drawContours(im, [section], 0, (255,0,255), 2)
             show_im(im)
-        hop_rows = detect_rows(bin_im, section, plot_cnt)
-        save_hop_rows(hop_rows, bin_im.shape)
+        hop_rows, angle = detect_rows(bin_im, section, plot_cnt)
+        save_hop_rows(hop_rows, bin_im.shape, angle)
     if g_debug:
         # draw hop_rows
         im2 = im.copy()
@@ -390,7 +438,7 @@ def detect_plants(im, im_data, rows):
         cv2.imwrite("logs/rows_in_im.png", im2)
 
     # detect blank spaces
-    blank_spaces_detect(bin_im.copy(), hop_rows, im.copy())
+    blank_spaces_detect(bin_im.copy(), hop_rows, im.copy(), angle)
 
 
 if __name__ == '__main__':
