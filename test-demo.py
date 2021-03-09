@@ -2,6 +2,7 @@ import unittest
 from demo import fill_polyline, sort_plants, check_space, remove_parallel_cnt
 import numpy as np
 
+N = M = 20
 
 class MyTestCase(unittest.TestCase):
     def test_fill_polyline(self):
@@ -31,7 +32,9 @@ class MyTestCase(unittest.TestCase):
         self.assertAlmostEqual(min_pdist, np.sqrt(2))
 
     def test_remove_parallel_cnt(self):
-        pass
+        size_data = [((8, 4), (16.0, 6.0), 0), ((12, 14), (4.0, 4.0), 0)]
+        idx = remove_parallel_cnt(size_data, 0)
+        self.assertTrue(np.array_equal(idx, np.array([0])))
 
 
 if __name__ == '__main__':
