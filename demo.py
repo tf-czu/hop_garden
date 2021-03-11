@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 from matplotlib import pyplot as plt
 import json
+import ntpath
 
 NUM_ROWS = 34
 SECTION_POINTS = [0,-1,570,3100]
@@ -24,13 +25,31 @@ MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
 N = M = 20 # for test only
 
 
+def spaces_to_file(spaces, cor, base_name):
+    X0, Y0 = cor
+    spaces_file = open("logs/"+base_name+"_spaces.csv", "w")
+    spaces_file.write("row,start_x,start_y,end_x,end_y\r\n")
+    for ii, row in enumerate(spaces):
+        for start, end in row:
+            start_x, start_y = start * PIX_SIZE
+            start_x = start_x + X0
+            start_y = Y0 - start_y
+            end_x, end_y = end * PIX_SIZE
+            end_x = end_x + X0
+            end_y = Y0 - end_y
+            spaces_file.write("%d,%.3f,%.3f,%.3f,%.3f\r\n" %(ii+1, start_x, start_y, end_x, end_y))
+
+    spaces_file.close()
+
+
 def parse_im_data(im_data):
     with open(im_data) as f:
         data = json.load(f)
         plot_cnt = np.array(data["plot_cnt"])
         rot_rec = np.array(data["rot_rec"])
+        cor = data["cor"]
 
-    return plot_cnt, rot_rec
+    return plot_cnt, rot_rec, cor
 
 
 def remove_parallel_cnt(sorted_size_data, angle):
@@ -41,16 +60,6 @@ def remove_parallel_cnt(sorted_size_data, angle):
         rec_r = sorted_size_data[ii+1]
         rec_l = cv2.boxPoints(rec_l)
         rec_r = cv2.boxPoints(rec_r)
-        # draw pic
-        """
-        bb = np.zeros((20, 20), np.uint8)
-        print(row)
-        cv2.polylines(bb, [row], False, 255, thickness=1)
-        rec_l_int = np.int32(rec_l)
-        rec_r_int = np.int32(rec_r)
-        cv2.drawContours(bb, [rec_l_int, rec_r_int], -1, 255, 1)
-        show_im(bb)
-        """
         rec_l_xR, rec_l_yR = rotate_points(rec_l[:, 0], rec_l[:, 1], angle)
         rec_r_xR, rec_r_yR = rotate_points(rec_r[:, 0], rec_r[:, 1], angle)
         len_rec_l = max(rec_l_xR) - min(rec_l_xR)
@@ -333,6 +342,7 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element, iterations=NUM_ERODE_ITER)  # removes very small objects
     bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element, iterations=NUM_ERODE_ITER)  # removes small holes
 
+    spaces_all = []
     for row in hop_rows:
         im_mask = np.zeros(bin_im.shape, np.uint8)  # to be area of interest around one row
         one_row = im_mask.copy()
@@ -396,7 +406,8 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
         rec_start = [sorted_size_data[ii] for ii in big_dist_id]
         rec_end = [sorted_size_data[ii] for ii in big_dist_id_end]
 
-        # Draw spaces in the image
+        # Draw spaces in the image and log spaces
+        spaces = []
         for item in zip(spaces_start, spaces_end, rec_start, rec_end):
             start, end, r_start, r_end = item  # TODO do we need centroids here?
             start2, end2, pdist = check_space(r_start, r_end)
@@ -404,13 +415,15 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
             if pdist_m < MAX_PLANT_DIST - 0.2:
                 continue
             cv2.line(org_image, tuple(start2), tuple(end2), (255, 0, 0), 2)
+            spaces.append([start, end])
+        spaces_all.append(spaces)
 
-    show_im(org_image)
-    cv2.imwrite("logs/org_image.png", org_image)
+    return spaces_all, org_image
 
 
-def detect_plants(im, im_data, rows):
-    plot_cnt, section = parse_im_data(im_data)
+def detect_plants(im, im_data, rows, imfile):
+    base_name = ntpath.basename(ntpath.splitext(imfile)[0])
+    plot_cnt, section, cor = parse_im_data(im_data)
     norm_g = norm_green(im)
     bin_im = threshold(norm_g)
     if g_debug:
@@ -432,13 +445,19 @@ def detect_plants(im, im_data, rows):
             row = row.T
             row = row.reshape((-1,1,2))
             cv2.polylines(im2, [row], False, (0, 0, 255), thickness=2)
-            cv2.drawContours(im2, [plot_cnt], 0, (255,0,0), 2)
+            cv2.drawContours(im2, [plot_cnt], 0, (255,0,255), 2)
 
         show_im(im2)
         cv2.imwrite("logs/rows_in_im.png", im2)
 
     # detect blank spaces
-    blank_spaces_detect(bin_im.copy(), hop_rows, im.copy(), angle)
+    spaces, im_labes = blank_spaces_detect(bin_im.copy(), hop_rows, im.copy(), angle)
+    cv2.drawContours(im_labes, [plot_cnt], 0, (255, 0, 255), 2)  # draw plot
+    show_im(im_labes)
+    im_name = "logs/"+base_name+"_labels.png"
+    cv2.imwrite(im_name, im_labes)
+
+    spaces_to_file(spaces, cor, base_name)
 
 
 if __name__ == '__main__':
@@ -477,6 +496,6 @@ if __name__ == '__main__':
     if im is not None:
         M, N, K = im.shape
         print("Resolution: %d, %d, %d" % (M, N, K))
-        detect_plants(im, args.im_data, rows)
+        detect_plants(im, args.im_data, rows, args.imfile)
     else:
         print("No image in path: %s" % args.imfile)
