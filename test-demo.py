@@ -15,7 +15,7 @@ class MyTestCase(unittest.TestCase):
         self.assertTrue(np.array_equal(fill_polyline(polyline), expected_ret))
 
     def test_sort_plants(self):
-        row = np.array([[0, 1],[1,1]])
+        row = np.array([[[0, 1]],[[1,1]]])
         centroids = np.array([[5,4], [1,2], [4,4]])
         expected_ret = np.array([1, 2, 0])
         ret, dist = sort_plants(row, centroids)
@@ -35,6 +35,11 @@ class MyTestCase(unittest.TestCase):
         size_data = [((8, 4), (16.0, 6.0), 0), ((12, 14), (4.0, 4.0), 0)]
         idx = remove_parallel_cnt(size_data, 0)
         self.assertTrue(np.array_equal(idx, np.array([0])))
+
+        #size_data = [((10, 20), (10.0, 20.0), -45), ((20, 20), (4.0, 4.0), 0)]
+        size_data = [((15, 25), (20.0, 10.0), 61), ((35, 5), (4.0, 4.0), 0)]
+        idx = remove_parallel_cnt(size_data, -61)
+        self.assertTrue(np.array_equal(idx, np.array([0, 1])))
 
 
 if __name__ == '__main__':
