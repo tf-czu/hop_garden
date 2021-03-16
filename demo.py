@@ -8,12 +8,10 @@ from matplotlib import pyplot as plt
 import json
 import ntpath
 
-NUM_ROWS = 34
 SECTION_POINTS = [0,-1,570,3100]
 
 #PIX_SIZE = 36/555  # m, for 1867 x 3402 image
 PIX_SIZE = 0.01  # 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
-EXPECT_ROW_WIDTH = 0.6  # m, expected row width (plants are sought there)
 MIN_PLANT_AREA = 0.01  # m^2
 MAX_PLANT_DIST = 1.5  # m
 MIN_PLANT_DIST = 0.6  # m
@@ -25,7 +23,8 @@ MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
 N = M = 20 # for test only
 
 
-def spaces_to_file(spaces, cor, base_name):
+def spaces_to_file(spaces, base_name):
+    cor = g_config["cor"]
     X0, Y0 = cor
     spaces_file = open("logs/"+base_name+"_spaces.csv", "w")
     spaces_file.write("row,start_x,start_y,end_x,end_y\r\n")
@@ -42,17 +41,8 @@ def spaces_to_file(spaces, cor, base_name):
     spaces_file.close()
 
 
-def parse_im_data(im_data):
-    with open(im_data) as f:
-        data = json.load(f)
-        plot_cnt = np.array(data["plot_cnt"])
-        rot_rec = np.array(data["rot_rec"])
-        cor = data["cor"]
-
-    return plot_cnt, rot_rec, cor
-
-
 def remove_parallel_cnt(sorted_size_data, angle):
+    angle = - angle  # the original angle was calculated for image rotation
     remove_idx = []
     for ii, rec_l in enumerate(sorted_size_data):
         if ii + 1 == len(sorted_size_data):
@@ -102,6 +92,7 @@ def rows_from_file(rows, im_shape):
     ret = []
     org_im_shape = None
     angle = None
+    thr = None
     scale_x = None
     scale_y = None
 
@@ -115,6 +106,9 @@ def rows_from_file(rows, im_shape):
             continue
         if not angle:
             angle = float(line)
+            continue
+        if not thr:
+            thr = float(line)
             continue
         x_s, y_s = line.split(";")
         x = np.asarray(eval(x_s))
@@ -134,6 +128,7 @@ def save_hop_rows(hop_rows, im_shape, angle):
     f = open("logs/detected_rows.txt", "w")
     f.write(str(im_shape) + "\r\n")  # write image resolution
     f.write("%.3f\r\n" %angle)
+    f.write("%.3f\r\n" %g_thr_num_wpixels)
     for row in hop_rows:
         x, y = row
         f.write(str(list(x)))
@@ -209,8 +204,9 @@ def rotate_points(xx, yy, a_deg):
 
 
 def sort_plants(row, centroids):
-    # Row is almost perfect line so ignore curvature and use the first point only.
-    start = row[0,:]
+    # Row is almost perfect line so ignore curvature and use the first point only (smallest x).
+    smallest_x_cor = np.argmin(row[:,:,0])
+    start = row[smallest_x_cor,:]
     dist_to_start = np.linalg.norm(centroids - start, axis=1)
     sort_idx = np.argsort(dist_to_start)
 
@@ -237,6 +233,7 @@ def check_space(r_start, r_end):
 
 
 def detect_rows(bin_im, section, plot_cnt):
+    num_rows = g_config["num_rows"]
     # irregular plot shape makes problem with angle calculation
     # use section cnt
     sample = np.zeros(bin_im.shape, np.uint8)
@@ -266,7 +263,7 @@ def detect_rows(bin_im, section, plot_cnt):
     mask_rows = num_wpixels_rows > g_thr_num_wpixels  # Threshold for rows detection, may be modified.
     # It corresponds with number of green pixels times 255.
     edge = np.diff(mask_rows)
-    assert sum(edge) == 2 * NUM_ROWS, "Number of rows should be %d, detected: %f" % (NUM_ROWS, sum(edge) / 2)
+    assert sum(edge) == 2 * num_rows, "Number of rows should be %d, detected: %f" % (num_rows, sum(edge) / 2)
 
     edge_positions = np.where(edge == True)[0]
     edge_positions = np.reshape(edge_positions, (edge_positions.size // 2, 2))
@@ -308,10 +305,11 @@ def detect_rows(bin_im, section, plot_cnt):
         # get poits
         p = np.poly1d(row_coeff)
         xn = rot_bin_im2.shape[1] -1  # last pixel row in the image
+        yn = rot_bin_im2.shape[0] - 1
         xx = np.arange(0, xn)  # use the full width of the rot_image
         yy = p(xx)
         # rotate points back, according to orig. image
-        xx_r, yy_r = rotate_points(xx, yy, a_deg)
+        xx_r, yy_r = rotate_points(xx, yy, a_deg)  # the angle has the same sign because it is not image
         xx_r = np.int32(np.round(xx_r))
         yy_r = np.int32(np.round(yy_r))
 
@@ -319,6 +317,10 @@ def detect_rows(bin_im, section, plot_cnt):
         idx = np.logical_and(xx_r>0, xx_r<=xn)
         xx_r = xx_r[idx]
         yy_r = yy_r[idx]
+        # again for y
+        idy = np.logical_and(yy_r > 0, yy_r <= yn)
+        xx_r = xx_r[idy]
+        yy_r = yy_r[idy]
         row_mask = np.zeros(bin_im.shape, dtype=bool)
         row_mask[yy_r,xx_r] = True
         cut_row_mask = np.logical_and(row_mask, plot_mask)
@@ -330,9 +332,11 @@ def detect_rows(bin_im, section, plot_cnt):
 
 
 def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
-    row_width_px = int(round(EXPECT_ROW_WIDTH / PIX_SIZE))
+    # m, expected row width (plants are sought there)
+    ex_row_width = g_config["ex_row_width"]
+    row_width_px = int(round(ex_row_width / PIX_SIZE))
     # print used constants
-    print("EXPECT_ROW_WIDTH: %.2f m" % EXPECT_ROW_WIDTH)
+    print("EXPECT_ROW_WIDTH: %.2f m" % ex_row_width)
     print("row_width_px: %d" % row_width_px)
     print("MIN_PLANT_AREA: %f m2" % MIN_PLANT_AREA)
     print("MAX_PLANT_DIST: %f m" % MAX_PLANT_DIST)
@@ -421,9 +425,10 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     return spaces_all, org_image
 
 
-def detect_plants(im, im_data, rows, imfile):
+def detect_plants(im, rows, imfile):
     base_name = ntpath.basename(ntpath.splitext(imfile)[0])
-    plot_cnt, section, cor = parse_im_data(im_data)
+    plot_cnt = np.array(g_config["plot_cnt"])
+    section = np.array(g_config["rot_rec"])
     norm_g = norm_green(im)
     bin_im = threshold(norm_g)
     if g_debug:
@@ -457,7 +462,7 @@ def detect_plants(im, im_data, rows, imfile):
     im_name = "logs/"+base_name+"_labels.png"
     cv2.imwrite(im_name, im_labes)
 
-    spaces_to_file(spaces, cor, base_name)
+    spaces_to_file(spaces, base_name)
 
 
 if __name__ == '__main__':
@@ -495,7 +500,9 @@ if __name__ == '__main__':
     im = cv2.imread(args.imfile)
     if im is not None:
         M, N, K = im.shape
+        with open(args.im_data) as f:
+            g_config = json.load(f)
         print("Resolution: %d, %d, %d" % (M, N, K))
-        detect_plants(im, args.im_data, rows, args.imfile)
+        detect_plants(im, rows, args.imfile)
     else:
         print("No image in path: %s" % args.imfile)
