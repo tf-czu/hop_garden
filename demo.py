@@ -153,6 +153,35 @@ def norm_green(im):
     return norm_g.astype(np.uint8)
 
 
+def excess_green(im):
+    b, g, r = cv2.split(im)
+    b = b.astype(float)
+    g = g.astype(float)
+    r = r.astype(float)
+
+    M = r + g + b
+    M[M == 0] = 1  # avoid division by 0
+
+    b_norm = b/M
+    g_norm = g/M
+    r_norm = r/M
+
+    exg = 2*g_norm - r_norm - b_norm  # it could be in range -2 to 2
+    return np.uint8( np.round((exg + 2)/4 * 255) )  # to 8 bit image
+
+
+def tgi_index(im):
+    b, g, r = cv2.split(im)
+    b = b.astype(float)
+    g = g.astype(float)
+    r = r.astype(float)
+
+    tgi = g - 0.39*r - 0.61*b  # it could be in range -255 to 255
+    return np.uint8( np.round((tgi + 255)/2))
+
+
+
+
 def show_im(im):
     cv2.namedWindow("Img", cv2.WINDOW_NORMAL)
     cv2.imshow('Img', im)
