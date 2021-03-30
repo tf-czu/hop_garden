@@ -162,11 +162,12 @@ def excess_green(im):
     M = r + g + b
     M[M == 0] = 1  # avoid division by 0
 
-    b_norm = b/M
-    g_norm = g/M
-    r_norm = r/M
+    # norm colours
+    b = b/M
+    g = g/M
+    r = r/M
 
-    exg = 2*g_norm - r_norm - b_norm  # it could be in range -2 to 2
+    exg = 2*g - r - b  # it could be in range -2 to 2
     return np.uint8( np.round((exg + 2)/4 * 255) )  # to 8 bit image
 
 
@@ -183,6 +184,8 @@ def tgi_index(im):
 
 
 def show_im(im):
+    if g_not_show:
+        return None
     cv2.namedWindow("Img", cv2.WINDOW_NORMAL)
     cv2.imshow('Img', im)
     cv2.waitKey(0)
@@ -454,15 +457,24 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     return spaces_all, org_image
 
 
-def detect_plants(im, rows, imfile):
+def detect_plants(im, rows, imfile, index):
     base_name = ntpath.basename(ntpath.splitext(imfile)[0])
     plot_cnt = np.array(g_config["plot_cnt"])
     section = np.array(g_config["rot_rec"])
-    norm_g = norm_green(im)
-    bin_im = threshold(norm_g)
+    assert index in ["g", "exg", "tgi"], "Wrong index name!"
+    if index == "g":
+        grey_im = norm_green(im)
+    elif index == "exg":
+        grey_im = excess_green(im)
+    elif index == "tgi":
+        grey_im = tgi_index(im)
+
+    bin_im = threshold(grey_im)
     if g_debug:
         show_im(bin_im)
         cv2.imwrite("logs/bin_image.png", bin_im)
+        show_im(grey_im)
+        cv2.imwrite("logs/"+base_name+"_"+index+".png", grey_im)
 
     if rows:
         hop_rows, angle = rows_from_file(rows, bin_im.shape)
@@ -488,10 +500,10 @@ def detect_plants(im, rows, imfile):
     spaces, im_labes = blank_spaces_detect(bin_im.copy(), hop_rows, im.copy(), angle)
     cv2.drawContours(im_labes, [plot_cnt], 0, (255, 0, 255), 2)  # draw plot
     show_im(im_labes)
-    im_name = "logs/"+base_name+"_labels.png"
+    im_name = "logs/"+base_name+"_"+index+"_labels.png"
     cv2.imwrite(im_name, im_labes)
 
-    spaces_to_file(spaces, base_name)
+    spaces_to_file(spaces, base_name+"_"+index)
 
 
 if __name__ == '__main__':
@@ -505,6 +517,9 @@ if __name__ == '__main__':
     parser.add_argument('--user-angle', help='User defined angle for rows detection')
     parser.add_argument('--debug', '-d', help='Shows debug graphs and images', action='store_true')
     parser.add_argument('--thr', help='Threshold for rows detection', default=6e4, type=float)
+    parser.add_argument('--index', help='Choice an index for calculation: g - norm green, exg - excess_green and tgi - tgi_index',
+                        default='tgi', type=str)
+    parser.add_argument('--not-show', '-n', help='Do not show images', action='store_true')
     args = parser.parse_args()
 
     os.makedirs("logs", exist_ok = True)
@@ -526,12 +541,14 @@ if __name__ == '__main__':
     if args.thr:
         g_thr_num_wpixels = args.thr
 
+    g_not_show = args.not_show
+
     im = cv2.imread(args.imfile)
     if im is not None:
         M, N, K = im.shape
         with open(args.im_data) as f:
             g_config = json.load(f)
         print("Resolution: %d, %d, %d" % (M, N, K))
-        detect_plants(im, rows, args.imfile)
+        detect_plants(im, rows, args.imfile, args.index)
     else:
         print("No image in path: %s" % args.imfile)
