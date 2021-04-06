@@ -23,7 +23,7 @@ def confert_config(config, size, name):
     ret_dic["plot_cnt"] = plot_cnt_new.tolist()
     ret_dic["rot_rec"] = section_new.tolist()
     ret_dic["im-size"] = [int(x_new), int(y_new)]
-    ret_dic["px-size"] = config["px-size"]*x_scale
+    ret_dic["px-size"] = config["px-size"]/x_scale
 
     with open(name, 'w') as outfile:
         json.dump(ret_dic, outfile)
