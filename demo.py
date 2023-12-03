@@ -10,15 +10,10 @@ import ntpath
 
 SECTION_POINTS = [0,-1,570,3100]
 
-#PIX_SIZE = 36/555  # m, for 1867 x 3402 image
-PIX_SIZE = 0.01  # 36/555 * 3402/22084  # m, increase pixel size for 12124 x 22084 resolution
 MIN_PLANT_AREA = 0.01  # m^2
 MAX_PLANT_DIST = 1.5  # m
 MIN_PLANT_DIST = 0.6  # m
-# element size is 3x3 px, one iteration corresponds to 1 px, formula is (distance to remove in meters) / pixel size
-NUM_ERODE_ITER = int(round(0.05/PIX_SIZE))
-SMOOTH = int(0.06/PIX_SIZE *20)
-MAX_DIST_TO_LINE = int(round(0.06/PIX_SIZE * 5))  # pixels
+MAX_DIST_TO_LINE  = 0.06  # m, use during rows detection
 
 N = M = 20 # for test only
 
@@ -30,10 +25,10 @@ def spaces_to_file(spaces, base_name):
     spaces_file.write("row,start_x,start_y,end_x,end_y\r\n")
     for ii, row in enumerate(spaces):
         for start, end in row:
-            start_x, start_y = start * PIX_SIZE
+            start_x, start_y = start * g_pix_size
             start_x = start_x + X0
             start_y = Y0 - start_y
-            end_x, end_y = end * PIX_SIZE
+            end_x, end_y = end * g_pix_size
             end_x = end_x + X0
             end_y = Y0 - end_y
             spaces_file.write("%d,%.3f,%.3f,%.3f,%.3f\r\n" %(ii+1, start_x, start_y, end_x, end_y))
@@ -153,7 +148,39 @@ def norm_green(im):
     return norm_g.astype(np.uint8)
 
 
+def excess_green(im):
+    b, g, r = cv2.split(im)
+    b = b.astype(float)
+    g = g.astype(float)
+    r = r.astype(float)
+
+    M = r + g + b
+    M[M == 0] = 1  # avoid division by 0
+
+    # norm colours
+    b = b/M
+    g = g/M
+    r = r/M
+
+    exg = 2*g - r - b  # it could be in range -2 to 2
+    return np.uint8( np.round((exg + 2)/4 * 255) )  # to 8 bit image
+
+
+def tgi_index(im):
+    b, g, r = cv2.split(im)
+    b = b.astype(float)
+    g = g.astype(float)
+    r = r.astype(float)
+
+    tgi = g - 0.39*r - 0.61*b  # it could be in range -255 to 255
+    return np.uint8( np.round((tgi + 255)/2))
+
+
+
+
 def show_im(im):
+    if g_not_show:
+        return None
     cv2.namedWindow("Img", cv2.WINDOW_NORMAL)
     cv2.imshow('Img', im)
     cv2.waitKey(0)
@@ -179,13 +206,14 @@ def rotate_image(bin_im, a_deg):
 
 
 def get_row(x, y):
+    max_dist_px = int(round(MAX_DIST_TO_LINE / g_pix_size * 5))  # pixels
     while True:
         coeffs = np.polyfit(x, y, 2)
         p = np.poly1d(coeffs)
         yp = p(x)
 
         dist = abs(yp - y)
-        if max(dist) < MAX_DIST_TO_LINE:
+        if max(dist) < max_dist_px:
             return coeffs
         max_diff_id = np.argmax(dist)
         x.pop(max_diff_id)
@@ -236,17 +264,20 @@ def detect_rows(bin_im, section, plot_cnt):
     num_rows = g_config["num_rows"]
     # irregular plot shape makes problem with angle calculation
     # use section cnt
-    sample = np.zeros(bin_im.shape, np.uint8)
-    cv2.drawContours(sample, [section], 0, (255), -1)
-    # https://en.wikipedia.org/wiki/Image_moment#Examples_2
-    moments = cv2.moments(sample)
-    mu11 = moments["mu11"]
-    mu20 = moments["mu20"]
-    mu02 = moments["mu02"]
-    a = 0.5 * np.arctan(2 * mu11 / (mu20 - mu02))  # radians
-    a_deg = np.rad2deg(a)
     if g_user_angle:
         a_deg = g_user_angle
+    else:
+        sample = np.zeros(bin_im.shape, np.uint8)
+        cv2.drawContours(sample, [section], 0, (255), -1)
+        # https://en.wikipedia.org/wiki/Image_moment#Examples_2
+        print(sample.shape, type(sample))
+        moments = cv2.moments(sample)
+        mu11 = moments["mu11"]
+        mu20 = moments["mu20"]
+        mu02 = moments["mu02"]
+        a = 0.5 * np.arctan(2 * mu11 / (mu20 - mu02))  # radians
+        a_deg = np.rad2deg(a)
+
     print("Calculated angle: %.3f" % a_deg)
     rot_bin_im = rotate_image(bin_im, a_deg)
     if g_debug:
@@ -255,7 +286,8 @@ def detect_rows(bin_im, section, plot_cnt):
 
     num_wpixels_rows = np.sum(rot_bin_im, axis=1)
     #print(num_wpixels_rows.size)
-    num_wpixels_rows = np.convolve(num_wpixels_rows, np.ones(SMOOTH) / SMOOTH, mode="same")  # smooth data
+    smooth = int(0.06 / g_pix_size * 20)
+    num_wpixels_rows = np.convolve(num_wpixels_rows, np.ones(smooth) / smooth, mode="same")  # smooth data
     # num_wpixels_rows = np.resize(num_wpixels_rows, num_wpixels_rows.size//10)
     if g_debug:
         plt.plot(num_wpixels_rows)
@@ -271,7 +303,7 @@ def detect_rows(bin_im, section, plot_cnt):
     # detect contour, used for rows detection
     __, rot_bin_im2 = cv2.threshold(rot_bin_im, 127, 255, cv2.THRESH_BINARY)  # again, it was damaged during rotation
     element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    rot_bin_im2 = cv2.morphologyEx(rot_bin_im2, cv2.MORPH_OPEN, element, iterations=NUM_ERODE_ITER)  # removes very small objects
+    rot_bin_im2 = cv2.morphologyEx(rot_bin_im2, cv2.MORPH_OPEN, element, iterations=g_num_erode_iter)  # removes very small objects
     contours, __ = cv2.findContours(rot_bin_im2.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
     print("Number of green splotchs: %d" %(len(contours)))
     # cv2.drawContours(rot_bin_im2, contours, -1, (255), 1)
@@ -334,7 +366,7 @@ def detect_rows(bin_im, section, plot_cnt):
 def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     # m, expected row width (plants are sought there)
     ex_row_width = g_config["ex_row_width"]
-    row_width_px = int(round(ex_row_width / PIX_SIZE))
+    row_width_px = int(round(ex_row_width / g_pix_size))
     # print used constants
     print("EXPECT_ROW_WIDTH: %.2f m" % ex_row_width)
     print("row_width_px: %d" % row_width_px)
@@ -343,8 +375,8 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
 
     element = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     # even number of pixel (element size 2 or 4) brings problems with contour shift.
-    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element, iterations=NUM_ERODE_ITER)  # removes very small objects
-    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element, iterations=NUM_ERODE_ITER)  # removes small holes
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_OPEN, element, iterations=g_num_erode_iter)  # removes very small objects
+    bin_im = cv2.morphologyEx(bin_im, cv2.MORPH_CLOSE, element, iterations=g_num_erode_iter)  # removes small holes
 
     spaces_all = []
     for row in hop_rows:
@@ -367,7 +399,7 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
         size_data = []
         for cnt in _contours:
             moments = cv2.moments(cnt)
-            ar = moments["m00"] * PIX_SIZE ** 2
+            ar = moments["m00"] * g_pix_size ** 2
             if ar < MIN_PLANT_AREA:  # Note it is possible that a small objects are already removed by morphologyEx function.
                 continue
             contours.append(cnt)
@@ -399,7 +431,7 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
         contours_sorted = [contours_sorted[ii] for ii in object_idx]
         cv2.drawContours(org_image, contours_sorted, -1, (255, 0, 0), 1)  # cnt used for space detection
 
-        dist_to_start = dist_to_start*PIX_SIZE  # dist in meters
+        dist_to_start = dist_to_start * g_pix_size  # dist in meters
         dist_diff = np.diff(dist_to_start)
 
         big_dist_id = np.where(dist_diff > MAX_PLANT_DIST)[0]
@@ -415,7 +447,7 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
         for item in zip(spaces_start, spaces_end, rec_start, rec_end):
             start, end, r_start, r_end = item  # TODO do we need centroids here?
             start2, end2, pdist = check_space(r_start, r_end)
-            pdist_m = pdist * PIX_SIZE  # dist in meters
+            pdist_m = pdist * g_pix_size  # dist in meters
             if pdist_m < MAX_PLANT_DIST - 0.2:
                 continue
             cv2.line(org_image, tuple(start2), tuple(end2), (255, 0, 0), 2)
@@ -425,15 +457,26 @@ def blank_spaces_detect(bin_im, hop_rows, org_image, angle):
     return spaces_all, org_image
 
 
-def detect_plants(im, rows, imfile):
+def detect_plants(im, rows, imfile, index):
     base_name = ntpath.basename(ntpath.splitext(imfile)[0])
     plot_cnt = np.array(g_config["plot_cnt"])
     section = np.array(g_config["rot_rec"])
-    norm_g = norm_green(im)
-    bin_im = threshold(norm_g)
+    assert index in ["g", "exg", "tgi", "ndvi"], "Wrong index name!"
+    if index == "g":
+        grey_im = norm_green(im)
+    elif index == "exg":
+        grey_im = excess_green(im)
+    elif index == "tgi":
+        grey_im = tgi_index(im)
+    elif index == "ndvi":
+        grey_im = im[:,:,0]
+
+    bin_im = threshold(grey_im)
     if g_debug:
         show_im(bin_im)
         cv2.imwrite("logs/bin_image.png", bin_im)
+        show_im(grey_im)
+        cv2.imwrite("logs/"+base_name+"_"+index+".png", grey_im)
 
     if rows:
         hop_rows, angle = rows_from_file(rows, bin_im.shape)
@@ -459,10 +502,10 @@ def detect_plants(im, rows, imfile):
     spaces, im_labes = blank_spaces_detect(bin_im.copy(), hop_rows, im.copy(), angle)
     cv2.drawContours(im_labes, [plot_cnt], 0, (255, 0, 255), 2)  # draw plot
     show_im(im_labes)
-    im_name = "logs/"+base_name+"_labels.png"
+    im_name = "logs/"+base_name+"_"+index+"_labels.png"
     cv2.imwrite(im_name, im_labes)
 
-    spaces_to_file(spaces, base_name)
+    spaces_to_file(spaces, base_name+"_"+index)
 
 
 if __name__ == '__main__':
@@ -476,6 +519,9 @@ if __name__ == '__main__':
     parser.add_argument('--user-angle', help='User defined angle for rows detection')
     parser.add_argument('--debug', '-d', help='Shows debug graphs and images', action='store_true')
     parser.add_argument('--thr', help='Threshold for rows detection', default=6e4, type=float)
+    parser.add_argument('--index', help='Choice an index for calculation: g - norm green, exg - excess_green and tgi - tgi_index',
+                        default='tgi', type=str)
+    parser.add_argument('--not-show', '-n', help='Do not show images', action='store_true')
     args = parser.parse_args()
 
     os.makedirs("logs", exist_ok = True)
@@ -497,12 +543,18 @@ if __name__ == '__main__':
     if args.thr:
         g_thr_num_wpixels = args.thr
 
+    g_not_show = args.not_show
+
     im = cv2.imread(args.imfile)
     if im is not None:
         M, N, K = im.shape
         with open(args.im_data) as f:
             g_config = json.load(f)
+            g_pix_size = g_config["px-size"]
+            # element size is 3x3 px, one iteration corresponds to 1 px, formula is (distance to remove in meters) / pixel size
+            g_num_erode_iter = int(round(0.05 / g_pix_size))
+
         print("Resolution: %d, %d, %d" % (M, N, K))
-        detect_plants(im, rows, args.imfile)
+        detect_plants(im, rows, args.imfile, args.index)
     else:
         print("No image in path: %s" % args.imfile)
